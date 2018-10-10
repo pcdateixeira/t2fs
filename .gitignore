@@ -1,0 +1,15 @@
+# Compiled library #
+###################
+
+/bin
+/lib/*.a
+
+# Examples and tests #
+######################
+
+exemplo/*
+!exemplo/*.c
+!exemplo/Makefile
+teste/*
+!teste/*.c
+!teste/Makefile
