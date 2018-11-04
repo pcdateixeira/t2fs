@@ -1,17 +1,188 @@
 #include "../include/apidisk.h"
-#include "../include/bitmap2.h"
 #include "../include/t2fs.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
-int identify2 (char *name, int size) {
-	strncpy (name, "Humberto Lentz - 242308\nMakoto Ishikawa - 216728\nPedro Teixeira - 228509\0", size);
-	return 0;
+#define NR_CLUSTERS 8192
+#define NR_CLUSTERS_DATA 8176
+#define CLUSTER_SIZE 512
+
+/* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
+/* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
+
+struct t2fs_superbloco superblock = {
+	"T2FS",
+	0x7E22,
+	0x0001,
+	0x00400000,
+	0x00004000,
+	0x00000002,
+	0x00000001,
+	0x00000012,
+	0x00002001
+};
+
+struct FileAllocationTable {
+    DWORD table[NR_CLUSTERS_DATA];
+    /* - Lista com C elementos de 4 bytes
+       - A quantidade C de elementos válidos nessa lista é igual à quantidade total de clusters da área de dados */
+};
+
+struct DirectoryTable {
+    struct t2fs_record table[CLUSTER_SIZE];
+    /* - Os diretórios organizam as entradas como uma lista linear de registros de tamanho da estrutura t2fs_record
+       - Todo diretório ocupa exatamente um cluster */
+};
+
+struct OpenFileTable {
+    /* Usado na seek, write, etc...
+        Para definir com atributos como current pointer, se está aberto para leitura ou escrita, etc... */
+};
+
+/* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
+/* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
+
+int isFormatted = 0; /* Disco será dado formatado ou deve ser criado ou estará "novo" e deve ser formatado ou ... (?)
+                    Fazer todos casos se necessário e modificar as funções */
+int createdEntries = 0; // Será usado como identificador de arquivos (handles)
+
+FileAllocationTable fat;
+DirectoryTable root;
+
+void init_fat(FileAllocationTable *fat) {
+    int i;
+
+    for (i = 2; i < NR_CLUSTERS_DATA - 1; i++) {
+		fat->table[i] = 0x00000000;
+	}
 }
 
-FILE2 create2 (char *filename) {
+void init_root(DirectoryTable *root, FileAllocationTable *fat) {
+    int i;
+
+    struct t2fs_record current_dir = {
+        TYPEVAL_DIRETORIO,
+        "/",
+        0x00000200,
+        0x00000001,
+        0x00002001
+    };
+
+    struct t2fs_record parent_dir = {
+        TYPEVAL_DIRETORIO,
+        "/",
+        0x00000200,
+        0x00000001,
+        0x00002001
+    };
+
+    for (i = 0; i < CLUSTER_SIZE - 1; i++) {
+        root->table[i] = (struct t2fs_record){0};
+    }
+
+    root->table[0] = current_dir;
+    root->table[1] = parent_dir;
+    fat->table[2] = 0xFFFFFFFF;
+}
+
+void format() {
+    init_fat(&fat);
+    init_root(&root, &fat);
+
+    // Criar funções de escrita e leitura mais específicas para as 3 (?) partes mais gerais do disco
+    write_sector(0, &superblock);
+    write_sector(1, &fat);
+    write_sector(8193, &root);
+}
+
+int getFirstFreeCluster(FileAllocationTable *fat) {
+    int i;
+
+    for (i = 2; i < NR_CLUSTERS_DATA - 1; i++) {
+		if (fat->table[i] == 0x00000000) {
+            return i;
+		}
+	}
+
 	return -1;
+}
+
+int getFirstFreeDirEntry(DirectoryTable *dir) {
+    int i;
+
+    for (i = 0; i < CLUSTER_SIZE - 1; i++) {
+        if (dir->table[i] == (struct t2fs_record){0}) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+void createFileEntry(char *filename, struct t2fs_record *record) {
+    record->TypeVal = TYPEVAL_REGULAR;
+    strcpy(record->name, filename);
+    record->bytesFileSize = 0x00000000;
+    record->clustersFileSize = 0x00000001;
+}
+
+
+int getFileHandleInDirectory(char *filename, DirectoryTable *dir) {
+    int i = 0;
+    int handle = -1;
+
+    while (i < CLUSTER_SIZE - 1) {
+        if (!strcmp(dir->table[i].name, filename)) {
+            handle = i;
+        }
+
+        i++;
+    }
+
+    return handle;
+}
+
+/* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
+/* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
+
+FILE2 create2 (char *filename) {
+
+    // O contador de posição do arquivo (current pointer) deve ser colocado na posição zero
+    // Adicionar ao implementar a tabela de arquivos abertos
+
+    struct t2fs_record new_file_entry;
+    int handle, first_free_cluster, first_free_dir_entry = -1;
+
+    // Caso já exista um arquivo ou diretório com o mesmo nome, a função deverá retornar um erro de criação
+    // Arrumar a função para procurar em todos diretórios
+    if (getFileHandleInDirectory(filename, &root) != -1) {
+        return -1;
+    }
+
+    handle = createdEntries++;
+
+    first_free_cluster = getFirstFreeCluster(&fat);
+    first_free_dir_entry = getFirstFreeDirEntry(&root);
+
+    if (first_free_cluster >= 2) {
+        createFileEntry(filename, &new_file_entry);
+        new_file_entry.firstCluster = first_free_cluster;
+
+        root.table[first_free_dir_entry] = new_file_entry;
+        fat.table[first_free_cluster] = 0xFFFFFFFF;
+
+        // Criar funções de escrita e leitura mais específicas para as 3 (?) partes mais gerais do disco
+        write_sector(1, &fat);
+        write_sector(8193, &root);
+    }
+    else {
+        return -1;
+    }
+
+    // A função deve retornar o identificador (handle) do arquivo
+    // Esse handle será usado em chamadas posteriores do sistema de arquivo para fins de manipulação do arquivo criado
+	return handle;
 }
 
 int delete2 (char *filename) {
@@ -69,3 +240,9 @@ int readdir2 (DIR2 handle, DIRENT2 *dentry) {
 int closedir2 (DIR2 handle) {
 	return -1;
 }
+
+int identify2 (char *name, int size) {
+	strncpy (name, "Humberto Lentz - 242308\nMakoto Ishikawa - 216728\nPedro Teixeira - 228509\0", size);
+	return 0;
+}
+
