@@ -14,13 +14,13 @@
 struct t2fs_superbloco superblock = {
 	"T2FS",
 	0x7E22,
-	0x0001,
-	0x00400000,
-	0x00004000,
-	0x00000002,
-	0x00000001,
-	0x00000012,
-	0x00002001
+	0x0001,     // Super Block Size         = 1
+	0x00400000, // Disk Size                = 4 194 304 bytes
+	0x00004000, // Nr. of Sectors           = 16 384
+	0x00000002, // Sectors per Cluster      = 2
+	0x00000001, // First FAT Sector         = 1
+	0x00000012, // Root Cluster             = 18    (começa em 0)
+	0x00001FF0  // First Data Sector        = 8176  (começa em 0)
 };
 
 struct FileAllocationTable {
@@ -45,7 +45,7 @@ struct OpenFileTable {
 
 int isFormatted = 0; /* Disco será dado formatado ou deve ser criado ou estará "novo" e deve ser formatado ou ... (?)
                     Fazer todos casos se necessário e modificar as funções */
-int createdEntries = 0; // Será usado como identificador de arquivos (handles)
+int openedFiles = 0; // Será usado como identificador de arquivos (handles)
 
 FileAllocationTable fat;
 DirectoryTable root;
@@ -63,18 +63,18 @@ void init_root(DirectoryTable *root, FileAllocationTable *fat) {
 
     struct t2fs_record current_dir = {
         TYPEVAL_DIRETORIO,
-        "/",
-        0x00000200,
-        0x00000001,
-        0x00002001
+        "root",
+        0x00000200, // File Size Bytes          = 512   (é um diretório)
+        0x00000001, // File Size Clusters       = 1
+        0x00000012  // First Cluster            = 16 para FAT + 2 reservados    (começa em 0)
     };
 
     struct t2fs_record parent_dir = {
         TYPEVAL_DIRETORIO,
-        "/",
-        0x00000200,
-        0x00000001,
-        0x00002001
+        "root",
+        0x00000200, // File Size Bytes          = 512   (é um diretório)
+        0x00000001, // File Size Clusters       = 1
+        0x00000012  // First Cluster            = 16 para FAT + 2 reservados    (começa em 0)
     };
 
     for (i = 0; i < CLUSTER_SIZE - 1; i++) {
@@ -108,7 +108,7 @@ int getFirstFreeCluster(FileAllocationTable *fat) {
 	return -1;
 }
 
-int getFirstFreeDirEntry(DirectoryTable *dir) {
+int getFirstFreeDirectoryEntry(DirectoryTable *dir) {
     int i;
 
     for (i = 0; i < CLUSTER_SIZE - 1; i++) {
@@ -128,19 +128,19 @@ void createFileEntry(char *filename, struct t2fs_record *record) {
 }
 
 
-int getFileHandleInDirectory(char *filename, DirectoryTable *dir) {
+int getFileIndexInRootDirectory(char *filename, DirectoryTable *dir) {
     int i = 0;
-    int handle = -1;
+    int index = -1;
 
     while (i < CLUSTER_SIZE - 1) {
         if (!strcmp(dir->table[i].name, filename)) {
-            handle = i;
+            index = i;
         }
 
         i++;
     }
 
-    return handle;
+    return index;
 }
 
 /* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
@@ -156,17 +156,18 @@ FILE2 create2 (char *filename) {
 
     // Caso já exista um arquivo ou diretório com o mesmo nome, a função deverá retornar um erro de criação
     // Arrumar a função para procurar em todos diretórios
-    if (getFileHandleInDirectory(filename, &root) != -1) {
+    if (getFileIndexInRootDirectory(filename, &root) != -1) {
         return -1;
     }
 
-    handle = createdEntries++;
+    handle = openedFiles++;
 
     first_free_cluster = getFirstFreeCluster(&fat);
-    first_free_dir_entry = getFirstFreeDirEntry(&root);
+    first_free_dir_entry = getFirstFreeDirectoryEntry(&root);
 
     if (first_free_cluster >= 2) {
         createFileEntry(filename, &new_file_entry);
+        // Converter para little endian
         new_file_entry.firstCluster = first_free_cluster;
 
         root.table[first_free_dir_entry] = new_file_entry;
