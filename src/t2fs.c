@@ -212,7 +212,9 @@ void createFileEntry(char *filename, struct t2fs_record *record) {
 }
 
 struct FileStatus {
-    int current_ptr;
+    int currentPtr;
+    int referenceCount;
+    struct t2fs_record *recordPtr;
 };
 
 struct OpenFileTable {
@@ -251,7 +253,9 @@ FILE2 create2 (char *filename) {
         new_file_entry.firstCluster = first_free_cluster;
         root.table[first_free_dir_entry] = new_file_entry;
 
-        oft.table[handle].current_ptr = 0;
+        oft.table[handle].currentPtr = 0;
+        oft.table[handle].referenceCount = 1;
+        oft.table[handle].recordPtr = &root.table[first_free_dir_entry];
         fat.table[first_free_cluster] = 0xFFFFFFFF;
 
         writeFATEntries(&fat);
