@@ -1,118 +1,202 @@
 #include "../include/apidisk.h"
 #include "../include/t2fs.h"
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
-#define NR_CLUSTERS 8192
-#define NR_CLUSTERS_DATA 8176
-#define CLUSTER_SIZE 512
+DWORD cluster_size;
+DWORD nr_clusters;
+DWORD sectors_per_cluster;
+DWORD nr_directory_entries;
+DWORD nr_FAT_entries;
+DWORD first_FAT_sector;
+DWORD root_dir_cluster;
 
-/* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
-/* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
+int max_opened_files = 10;
+int opened_files = -1;
 
-struct t2fs_superbloco superblock = {
-	"T2FS",
-	0x7E22,
-	0x0001,     // Super Block Size         = 1
-	0x00400000, // Disk Size                = 4 194 304 bytes
-	0x00004000, // Nr. of Sectors           = 16 384
-	0x00000002, // Sectors per Cluster      = 2
-	0x00000001, // First FAT Sector         = 1
-	0x00000012, // Root Cluster             = 18    (começa em 0)
-	0x00001FF0  // First Data Sector        = 8176  (começa em 0)
-};
+struct t2fs_superbloco superblock;
 
-struct FileAllocationTable {
-    DWORD table[NR_CLUSTERS_DATA];
-    /* - Lista com C elementos de 4 bytes
-       - A quantidade C de elementos válidos nessa lista é igual à quantidade total de clusters da área de dados */
-};
+DWORD todword(DWORD pos, BYTE *buffer) {
+    DWORD result =  (DWORD) buffer[pos + 0] << 24 |
+                    (DWORD) buffer[pos + 1] << 16 |
+                    (DWORD) buffer[pos + 2] << 8  |
+                    (DWORD) buffer[pos + 3] << 0;
+
+    return result;
+}
+
+WORD toword(DWORD pos, BYTE *buffer) {
+    WORD result =   (WORD) buffer[pos + 0] << 8  |
+                    (WORD) buffer[pos + 1] << 0;
+
+    return result;
+}
+
+void readSuperblock() {
+    BYTE buffer[SECTOR_SIZE];
+
+    memset(buffer, 0, SECTOR_SIZE);
+    read_sector(0, &buffer[0]);
+
+    strncpy(superblock.id, &buffer[0], 4);
+    superblock.version = toword(4, buffer);
+    superblock.superblockSize = toword(6, buffer);
+    superblock.DiskSize = todword(8, buffer);
+    superblock.NofSectors = todword(12, buffer);
+    superblock.SectorsPerCluster = todword(16, buffer);
+    superblock.pFATSectorStart = todword(20, buffer);
+    superblock.RootDirCluster = todword(24, buffer);
+    superblock.DataSectorStart = todword(28, buffer);
+
+    cluster_size = superblock.SectorsPerCluster;
+    nr_clusters = superblock.DiskSize / cluster_size;
+    sectors_per_cluster = cluster_size / SECTOR_SIZE;
+    nr_directory_entries = cluster_size / 64;
+    nr_FAT_entries = nr_clusters / SECTOR_SIZE;
+    first_FAT_sector = superblock.pFATSectorStart;
+    root_dir_cluster = superblock.RootDirCluster;
+
+    //nr_clusters_data = (superblock.NofSectors - superblock.DataSectorStart) / cluster_size;
+}
+
+void read_cluster(DWORD sector, BYTE *buffer) {
+    int i;
+    int nr_reads = sectors_per_cluster;
+
+    for (i = 0; i <= nr_reads - 1; i++) {
+        read_sector(sector + (i * SECTOR_SIZE), &buffer[(i * SECTOR_SIZE)]);
+    }
+}
+
+void write_cluster(DWORD sector, BYTE *buffer) {
+    int i;
+    int nr_writes = sectors_per_cluster;
+
+    for (i = 0; i <= nr_writes - 1; i++) {
+        write_sector(sector + (i * SECTOR_SIZE), &buffer[(i * SECTOR_SIZE)]);
+    }
+}
 
 struct DirectoryTable {
-    struct t2fs_record table[CLUSTER_SIZE];
-    /* - Os diretórios organizam as entradas como uma lista linear de registros de tamanho da estrutura t2fs_record
-       - Todo diretório ocupa exatamente um cluster */
+    struct t2fs_record table[nr_directory_entries];
 };
 
-struct OpenFileTable {
-    /* Usado na seek, write, etc...
-        Para definir com atributos como current pointer, se está aberto para leitura ou escrita, etc... */
-};
+struct DirectoryTable root;
 
-/* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
-/* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
+struct t2fs_record torecord(BYTE *buffer) {
+    struct t2fs_record entry_read;
 
-int isFormatted = 0; /* Disco será dado formatado ou deve ser criado ou estará "novo" e deve ser formatado ou ... (?)
-                    Fazer todos casos se necessário e modificar as funções */
-int openedFiles = 0; // Será usado como identificador de arquivos (handles)
+    entry_read.TypeVal = (BYTE) buffer[0];
+    strncpy(entry_read.name, &buffer[1], 51);
+    entry_read.bytesFileSize = todword(52, buffer);
+    entry_read.clustersFileSize = todword(56, buffer);
+    entry_read.firstCluster = todword(60, buffer);
 
-FileAllocationTable fat;
-DirectoryTable root;
-
-void init_fat(FileAllocationTable *fat) {
-    int i;
-
-    for (i = 2; i < NR_CLUSTERS_DATA - 1; i++) {
-		fat->table[i] = 0x00000000;
-	}
+    return entry_read;
 }
 
-void init_root(DirectoryTable *root, FileAllocationTable *fat) {
+void readDirectoryRecords(DWORD firstCluster, DirectoryTable *dir) {
     int i;
+    int nr_entries = nr_directory_entries;
 
-    struct t2fs_record current_dir = {
-        TYPEVAL_DIRETORIO,
-        "root",
-        0x00000200, // File Size Bytes          = 512   (é um diretório)
-        0x00000001, // File Size Clusters       = 1
-        0x00000012  // First Cluster            = 16 para FAT + 2 reservados    (começa em 0)
-    };
+    BYTE buffer[cluster_size];
 
-    struct t2fs_record parent_dir = {
-        TYPEVAL_DIRETORIO,
-        "root",
-        0x00000200, // File Size Bytes          = 512   (é um diretório)
-        0x00000001, // File Size Clusters       = 1
-        0x00000012  // First Cluster            = 16 para FAT + 2 reservados    (começa em 0)
-    };
+    memset(buffer, 0, cluster_size);
+    read_cluster(firstCluster * cluster_size, buffer);
 
-    for (i = 0; i < CLUSTER_SIZE - 1; i++) {
-        root->table[i] = (struct t2fs_record){0};
+    for (i = 0; i <= nr_entries - 1; i++) {
+        dir->table[i] = torecord(&buffer[i * 64]);
+    }
+}
+
+void writeDirectoryRecords(DWORD firstCluster, DirectoryTable *dir) {
+    int i;
+    int nr_entries = nr_directory_entries;
+
+    BYTE buffer[cluster_size];
+
+    // Fazer o contrário ainda
+}
+
+int getFileIndexInDirectory(char *filename, DirectoryTable *dir) {
+    int i;
+    int nr_entries = nr_directory_entries;
+
+    for (i = 0; i <= nr_entries - 1; i++) {
+        if (strcmp(dir->table[i].name, filename) == 0) {
+            return i;
+        }
     }
 
-    root->table[0] = current_dir;
-    root->table[1] = parent_dir;
-    fat->table[2] = 0xFFFFFFFF;
+    return -1;
 }
 
-void format() {
-    init_fat(&fat);
-    init_root(&root, &fat);
+struct FileAllocationTable {
+    DWORD table[nr_FAT_entries];
+};
 
-    // Criar funções de escrita e leitura mais específicas para as 3 (?) partes mais gerais do disco
-    write_sector(0, &superblock);
-    write_sector(1, &fat);
-    write_sector(8193, &root);
+struct FileAllocationTable fat;
+
+void read_FAT(BYTE *buffer) {
+    int i;
+    int nr_reads = nr_FAT_entries;
+
+    for (i = 0; i <= nr_reads - 1; i++) {
+        read_sector(first_FAT_sector + (i * SECTOR_SIZE), &buffer[(i * SECTOR_SIZE)]);
+    }
+}
+
+void write_FAT(BYTE *buffer) {
+    int i;
+    int nr_reads = nr_FAT_entries;
+
+    for (i = 0; i <= nr_reads - 1; i++) {
+        write_sector(first_FAT_sector + (i * SECTOR_SIZE), &buffer[(i * SECTOR_SIZE)]);
+    }
+}
+
+void readFATEntries(FileAllocationTable *fat) {
+    int i;
+    int nr_entries = nr_directory_entries;
+
+    BYTE buffer[nr_clusters];
+
+    memset(buffer, 0, nr_clusters);
+    read_FAT(first_FAT_sector, buffer);
+
+    for (i = 0; i <= nr_entries - 1; i++) {
+        fat->table[i] = todword(i * 4, buffer);
+    }
+}
+
+void writeFATEntries(FileAllocationTable *fat) {
+    int i;
+    int nr_entries = nr_directory_entries;
+
+    BYTE buffer[nr_clusters];
+
+    // Fazer o contrário ainda
 }
 
 int getFirstFreeCluster(FileAllocationTable *fat) {
     int i;
 
-    for (i = 2; i < NR_CLUSTERS_DATA - 1; i++) {
-		if (fat->table[i] == 0x00000000) {
+    for (i = 2; i <= nr_FAT_entries - 1; i++) {
+        if (fat->table[i] == 0x00000000) {
             return i;
 		}
-	}
+    }
 
-	return -1;
+    return -1;
 }
 
 int getFirstFreeDirectoryEntry(DirectoryTable *dir) {
     int i;
+    int nr_entries = nr_directory_entries;
 
-    for (i = 0; i < CLUSTER_SIZE - 1; i++) {
-        if (dir->table[i] == (struct t2fs_record){0}) {
+    for (i = 0; i <= nr_entries - 1; i++) {
+        if (dir->table[i].TypeVal == 0x00) {
             return i;
         }
     }
@@ -122,67 +206,61 @@ int getFirstFreeDirectoryEntry(DirectoryTable *dir) {
 
 void createFileEntry(char *filename, struct t2fs_record *record) {
     record->TypeVal = TYPEVAL_REGULAR;
-    strcpy(record->name, filename);
+    strncpy(record->name, filename, 51);
     record->bytesFileSize = 0x00000000;
     record->clustersFileSize = 0x00000001;
 }
 
+struct FileStatus {
+    int current_ptr;
+};
 
-int getFileIndexInRootDirectory(char *filename, DirectoryTable *dir) {
-    int i = 0;
-    int index = -1;
+struct OpenFileTable {
+    struct FileStatus table[max_opened_files];
+};
 
-    while (i < CLUSTER_SIZE - 1) {
-        if (!strcmp(dir->table[i].name, filename)) {
-            index = i;
-        }
+struct OpenFileTable oft;
 
-        i++;
-    }
-
-    return index;
-}
-
+/* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
+/* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
 /* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
 /* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
 
 FILE2 create2 (char *filename) {
-
-    // O contador de posição do arquivo (current pointer) deve ser colocado na posição zero
-    // Adicionar ao implementar a tabela de arquivos abertos
-
     struct t2fs_record new_file_entry;
     int handle, first_free_cluster, first_free_dir_entry = -1;
 
-    // Caso já exista um arquivo ou diretório com o mesmo nome, a função deverá retornar um erro de criação
-    // Arrumar a função para procurar em todos diretórios
-    if (getFileIndexInRootDirectory(filename, &root) != -1) {
+    // Se arquivo já existe, o mesmo terá seu conteúdo removido e assumirá um tamanho de zero bytes
+    // É a função truncate2(handle) precedida por um seek2(handle, 0)
+    // Arrumar a função abaixo para procurar em todos diretórios e também fazer o que diz acima
+    if (getFileIndexInDirectory(filename, &root) != -1) {
         return -1;
     }
 
-    handle = openedFiles++;
-
+    readFATEntries(&fat);
     first_free_cluster = getFirstFreeCluster(&fat);
-    first_free_dir_entry = getFirstFreeDirectoryEntry(&root);
 
     if (first_free_cluster >= 2) {
-        createFileEntry(filename, &new_file_entry);
-        // Converter para little endian
-        new_file_entry.firstCluster = first_free_cluster;
+        handle = opened_files++;
 
+        // Generalizar a função abaixo para ler do diretório atual de trabalho (?)
+        readDirectoryRecords(root_dir_cluster, &root);
+        first_free_dir_entry = getFirstFreeDirectoryEntry(&root);
+
+        createFileEntry(filename, &new_file_entry);
+        new_file_entry.firstCluster = first_free_cluster;
         root.table[first_free_dir_entry] = new_file_entry;
+
+        oft.table[handle].current_ptr = 0;
         fat.table[first_free_cluster] = 0xFFFFFFFF;
 
-        // Criar funções de escrita e leitura mais específicas para as 3 (?) partes mais gerais do disco
-        write_sector(1, &fat);
-        write_sector(8193, &root);
+        writeFATEntries(&fat);
+        writeDirectoryRecords(root_dir_cluster, &root);
     }
     else {
         return -1;
     }
 
-    // A função deve retornar o identificador (handle) do arquivo
-    // Esse handle será usado em chamadas posteriores do sistema de arquivo para fins de manipulação do arquivo criado
 	return handle;
 }
 
