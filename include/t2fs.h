@@ -8,6 +8,7 @@
 #define TYPEVAL_INVALIDO    0x00
 #define TYPEVAL_REGULAR     0x01
 #define TYPEVAL_DIRETORIO   0x02
+#define	TYPEVAL_LINK		0x03
 
 #define	INVALID_PTR	-1
 
@@ -23,37 +24,31 @@ typedef unsigned int DWORD;
 /** Superbloco */
 struct t2fs_superbloco {
 	char    id[4];          	/* Identificação do sistema de arquivo. É formado pelas letras “T2FS”. */
-	WORD    version;        	/* Versão atual desse sistema de arquivos: (valor fixo 0x7E2=2018; 1=1º semestre). */
-	WORD    superblockSize; 	/* O superbloco ocupa o primeiro bloco do disco, isso é, o bloco zero. */
-	WORD    freeBlocksBitmapSize;	/* Quantidade de blocos usados para armazenar o bitmap de blocos de dados livres e ocupados. */
-	WORD    freeInodeBitmapSize;	/* Quantidade de blocos usados para armazenar o bitmap de i-nodes livres e ocupados. */
-	WORD    inodeAreaSize;		/* Quantidade de blocos usados para armazenar os i-nodes do sistema. */
-	WORD    blockSize;		/* Quantidade de setores que formam um bloco lógico. */
-	DWORD   diskSize;		/* Quantidade total de blocos na partição T2FS. Inclui o superbloco, áreas de bitmap, área de i-node e blocos de dados */
+	WORD    version;        	/* Versão atual desse sistema de arquivos: (valor fixo 0x7E2=2018; 2=2º semestre). */
+	WORD    superblockSize; 	/* Quantidade de setores lógicos que formam o superbloco. (fixo em 1 setor) */
+	DWORD	DiskSize;			/* Tamanho total, em bytes, da partição T2FS. Inclui o superbloco, a área de FAT e os clusters de dados. */
+	DWORD	NofSectors;			/* Quantidade total de setores lógicos da partição T2FS. Inclui o superbloco, a área de FAT e os clusters de dados. */
+	DWORD	SectorsPerCluster;	/* Número de setores lógicos que formam um cluster. */
+	DWORD	pFATSectorStart;	/* Número do setor lógico onde a FAT inicia. */
+	DWORD	RootDirCluster;		/* Cluster onde inicia o arquivo correspon-dente ao diretório raiz */
+	DWORD	DataSectorStart;	/* Primeiro setor lógico da área de blocos de dados (cluster 0). */
 };
+
 
 /** Registro de diretório (entrada de diretório) */
 struct t2fs_record {
-	BYTE    TypeVal;        /* Tipo da entrada. Indica se o registro é inválido (TYPEVAL_INVALIDO), arquivo (TYPEVAL_REGULAR) ou diretório (TYPEVAL_DIRETORIO) */
-	char    name[59];       /* Nome do arquivo. : string com caracteres ASCII (0x21 até 0x7A), case sensitive. */
-	DWORD   inodeNumber;    /* Número do i-node (se inválido, recebe INVALID_PTR)  */
-};
-
-/** i-node */
-struct t2fs_inode {
-	DWORD	blocksFileSize;	/* Tamanho do arquivo expresso em quantidade de  blocos */
-	DWORD	bytesFileSize;	/* Tamanho do arquivo expresso em bytes */
-	DWORD	dataPtr[2];	/* Dois ponteiros diretos (little endian). Se inválido, recebe INVALID_PTR.        */
-	DWORD	singleIndPtr;   /* Ponteiro de indireção simples (little endian). Se inválido, recebe INVALID_PTR. */
-	DWORD	doubleIndPtr;   /* Ponteiro de indireção dupla (little endian) Se inválido, recebe INVALID_PTR.    */
-	DWORD	reservado[2];	/* Reservado */
+	BYTE    TypeVal;        /* Tipo da entrada. Indica se o registro é inválido (TYPEVAL_INVALIDO), arquivo (TYPEVAL_REGULAR), diretório (TYPEVAL_DIRETORIO) ou link (TYPEVAL_LINK) */
+	char    name[51];       /* Nome do arquivo. : string com caracteres ASCII (0x21 até 0x7A), case sensitive. */
+	DWORD	bytesFileSize;	/* Tamanho do arquivo. Expresso em número de bytes. */
+	DWORD	clustersFileSize;	/* Tamanho do arquivo. Expresso em número de clusters. */
+	DWORD	firstCluster;	/* Número do primeiro cluster de dados correspondente a essa entrada de diretório */
 };
 
 /** Registro com as informações da entrada de diretório, lida com readdir2 */
 #define MAX_FILE_NAME_SIZE 255
 typedef struct {
     char    name[MAX_FILE_NAME_SIZE+1]; /* Nome do arquivo cuja entrada foi lida do disco      */
-    BYTE    fileType;                   /* Tipo do arquivo: regular (0x01) ou diretório (0x02) */
+    BYTE    fileType;                   /* Tipo do arquivo: regular (0x01), diretório (0x02) ou link (0x03) */
     DWORD   fileSize;                   /* Numero de bytes do arquivo                          */
 } DIRENT2;
 
@@ -216,9 +211,9 @@ Função:	Apagar um subdiretório do disco.
 			(a) o diretório a ser removido não está vazio;
 			(b) "pathname" não existente;
 			(c) algum dos componentes do "pathname" não existe (caminho inválido);
-			(d) o "pathname" indicado não é um arquivo;
+			(d) o "pathname" indicado não é um diretório;
 
-Entra:	pathname -> caminho do diretório a ser criado
+Entra:	pathname -> caminho do diretório a ser removido
 
 Saída:	Se a operação foi realizada com sucesso, a função retorna "0" (zero).
 	Em caso de erro, será retornado um valor diferente de zero.
@@ -277,7 +272,7 @@ DIR2 opendir2 (char *pathname);
 /*-----------------------------------------------------------------------------
 Função:	Realiza a leitura das entradas do diretório identificado por "handle".
 	A cada chamada da função é lida a entrada seguinte do diretório representado pelo identificador "handle".
-	Algumas das informações dessas entradas devem ser colocadas no parâmetro "dentry".
+	Algumas das informações dessas entradas serão colocadas no parâmetro "dentry".
 	Após realizada a leitura de uma entrada, o ponteiro de entradas (current entry) deve ser ajustado para a próxima entrada válida, seguinte à última lida.
 	São considerados erros:
 		(a) qualquer situação que impeça a realização da operação
@@ -303,4 +298,18 @@ Saída:	Se a operação foi realizada com sucesso, a função retorna "0" (zero).
 int closedir2 (DIR2 handle);
 
 
+/*-----------------------------------------------------------------------------
+Função:	Função usada para criar um caminho alternativo (softlink) com o nome dado por linkname (relativo ou absoluto) para um arquivo ou diretório fornecido por filename.
+
+Entra:	linkname -> nome do link a ser criado
+	filename -> nome do arquivo ou diretório apontado pelo link
+
+Saída:	Se a operação foi realizada com sucesso, a função retorna "0" (zero).
+	Em caso de erro, será retornado um valor diferente de zero.
+-----------------------------------------------------------------------------*/
+int ln2(char *linkname, char *filename);
+
 #endif
+
+
+
