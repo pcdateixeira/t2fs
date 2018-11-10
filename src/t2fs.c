@@ -4,6 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+int max_opened_files = 10;
+int opened_files = -1;
+
+int superblock_in_memory = 0;
 DWORD cluster_size;
 DWORD nr_clusters;
 DWORD sectors_per_cluster;
@@ -12,10 +16,28 @@ DWORD nr_FAT_entries;
 DWORD first_FAT_sector;
 DWORD root_dir_cluster;
 
-int max_opened_files = 10;
-int opened_files = -1;
-
 struct t2fs_superbloco superblock;
+
+struct DirectoryTable {
+    struct t2fs_record table[nr_directory_entries];
+};
+struct DirectoryTable root;
+
+struct FileAllocationTable {
+    DWORD table[nr_FAT_entries];
+};
+struct FileAllocationTable fat;
+
+struct FileStatus {
+    int offset;
+    int referenceCount;
+    struct t2fs_record *recordPtr;
+};
+
+struct OpenFileTable {
+    struct FileStatus table[max_opened_files];
+};
+struct OpenFileTable oft;
 
 DWORD todword(DWORD pos, BYTE *buffer) {
     DWORD result =  (DWORD) buffer[pos + 0] << 24 |
@@ -39,7 +61,7 @@ void readSuperblock() {
     memset(buffer, 0, SECTOR_SIZE);
     read_sector(0, &buffer[0]);
 
-    strncpy(superblock.id, &buffer[0], 4);
+    strncpy(superblock.id, (char *)&buffer[0], 4);
     superblock.version = toword(4, buffer);
     superblock.superblockSize = toword(6, buffer);
     superblock.DiskSize = todword(8, buffer);
@@ -58,6 +80,8 @@ void readSuperblock() {
     root_dir_cluster = superblock.RootDirCluster;
 
     //nr_clusters_data = (superblock.NofSectors - superblock.DataSectorStart) / cluster_size;
+
+    superblock_in_memory = 1;
 }
 
 void read_cluster(DWORD sector, BYTE *buffer) {
@@ -78,17 +102,11 @@ void write_cluster(DWORD sector, BYTE *buffer) {
     }
 }
 
-struct DirectoryTable {
-    struct t2fs_record table[nr_directory_entries];
-};
-
-struct DirectoryTable root;
-
 struct t2fs_record torecord(BYTE *buffer) {
     struct t2fs_record entry_read;
 
     entry_read.TypeVal = (BYTE) buffer[0];
-    strncpy(entry_read.name, &buffer[1], 51);
+    strncpy(entry_read.name, (char *)&buffer[1], 51);
     entry_read.bytesFileSize = todword(52, buffer);
     entry_read.clustersFileSize = todword(56, buffer);
     entry_read.firstCluster = todword(60, buffer);
@@ -131,12 +149,6 @@ int getFileIndexInDirectory(char *filename, DirectoryTable *dir) {
 
     return -1;
 }
-
-struct FileAllocationTable {
-    DWORD table[nr_FAT_entries];
-};
-
-struct FileAllocationTable fat;
 
 void read_FAT(BYTE *buffer) {
     int i;
@@ -211,18 +223,6 @@ void createFileEntry(char *filename, struct t2fs_record *record) {
     record->clustersFileSize = 0x00000001;
 }
 
-struct FileStatus {
-    int offset;
-    int referenceCount;
-    struct t2fs_record *recordPtr;
-};
-
-struct OpenFileTable {
-    struct FileStatus table[max_opened_files];
-};
-
-struct OpenFileTable oft;
-
 /* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
 /* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
 /* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
@@ -231,6 +231,9 @@ struct OpenFileTable oft;
 FILE2 create2 (char *filename) {
     struct t2fs_record new_file_entry;
     int handle, first_free_cluster, first_free_dir_entry = -1;
+
+    if(superblock_in_memory == 0)
+    	readSuperblock();
 
     // Se arquivo já existe, o mesmo terá seu conteúdo removido e assumirá um tamanho de zero bytes
     // É a função truncate2(handle) precedida por um seek2(handle, 0)
