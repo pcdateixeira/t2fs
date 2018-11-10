@@ -4,6 +4,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+
+To do:
+
+- Corrigir as declaracoes de vetores de tamanhos variaveis, usando outra estrutura de dados em seus lugares
+- Terminar as funcoes de escrita na FAT e na tabela de diretorios, que estao incompletas
+
+*/
+
 int max_opened_files = 10;
 int opened_files = -1;
 
@@ -19,12 +28,12 @@ DWORD root_dir_cluster;
 struct t2fs_superbloco superblock;
 
 struct DirectoryTable {
-    struct t2fs_record table[nr_directory_entries];
+    struct t2fs_record table[nr_directory_entries]; // !!!!!!!!!!!! Corrigir, C nao permite declarar vetores de tamanhos variaveis em tempo de compilacao
 };
 struct DirectoryTable root;
 
 struct FileAllocationTable {
-    DWORD table[nr_FAT_entries];
+    DWORD table[nr_FAT_entries]; // !!!!!!!!!!!! Corrigir, C nao permite declarar vetores de tamanhos variaveis em tempo de compilacao
 };
 struct FileAllocationTable fat;
 
@@ -35,7 +44,7 @@ struct FileStatus {
 };
 
 struct OpenFileTable {
-    struct FileStatus table[max_opened_files];
+    struct FileStatus table[max_opened_files]; // !!!!!!!!!!!! Corrigir, C nao permite declarar vetores de tamanhos variaveis em tempo de compilacao
 };
 struct OpenFileTable oft;
 
@@ -118,7 +127,7 @@ void readDirectoryRecords(DWORD firstCluster, DirectoryTable *dir) {
     int i;
     int nr_entries = nr_directory_entries;
 
-    BYTE buffer[cluster_size];
+    BYTE buffer[cluster_size]; // !!!!!!!!!!!! Corrigir, C nao permite declarar vetores de tamanhos variaveis em tempo de compilacao
 
     memset(buffer, 0, cluster_size);
     read_cluster(firstCluster * cluster_size, buffer);
@@ -132,7 +141,7 @@ void writeDirectoryRecords(DWORD firstCluster, DirectoryTable *dir) {
     int i;
     int nr_entries = nr_directory_entries;
 
-    BYTE buffer[cluster_size];
+    BYTE buffer[cluster_size]; // !!!!!!!!!!!! Corrigir, C nao permite declarar vetores de tamanhos variaveis em tempo de compilacao
 
     // Fazer o contrário ainda
 }
@@ -172,7 +181,7 @@ void readFATEntries(FileAllocationTable *fat) {
     int i;
     int nr_entries = nr_directory_entries;
 
-    BYTE buffer[nr_clusters];
+    BYTE buffer[nr_clusters]; // !!!!!!!!!!!! Corrigir, C nao permite declarar vetores de tamanhos variaveis em tempo de compilacao
 
     memset(buffer, 0, nr_clusters);
     read_FAT(first_FAT_sector, buffer);
@@ -186,7 +195,7 @@ void writeFATEntries(FileAllocationTable *fat) {
     int i;
     int nr_entries = nr_directory_entries;
 
-    BYTE buffer[nr_clusters];
+    BYTE buffer[nr_clusters]; // !!!!!!!!!!!! Corrigir, C nao permite declarar vetores de tamanhos variaveis em tempo de compilacao
 
     // Fazer o contrário ainda
 }
