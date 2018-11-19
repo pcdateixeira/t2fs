@@ -93,7 +93,7 @@ void readSuperblock() {
     memset(buffer, 0, sizeof(buffer));
     read_sector(0, buffer);
 
-    strncpy(superblock.id, buffer, 4);
+    strncpy(superblock.id, (char *) buffer, 4);
     superblock.version = swapendianword(toword(4, buffer));
     superblock.superblockSize = swapendianword(toword(6, buffer));
     superblock.DiskSize = swapendiandword(todword(8, buffer));
@@ -131,7 +131,7 @@ void readSuperblock() {
     printf("First Data Sector: %x %d\n\n", first_data_sector, first_data_sector);
     */
     new_record.TypeVal = TYPEVAL_DIRETORIO;
-    strncpy(new_record.name, filename, 2);
+    strncpy(new_record.name, (char *) filename, 2);
     new_record.bytesFileSize = cluster_size;
     new_record.clustersFileSize = 0x00000001;
     new_record.firstCluster = root_dir_cluster;
@@ -169,7 +169,7 @@ struct t2fs_record torecord(BYTE *buffer) {
     struct t2fs_record entry_read;
 
     entry_read.TypeVal = (BYTE) buffer[0];
-    strncpy(entry_read.name, &buffer[1], 52);
+    strncpy(entry_read.name, (char *) &buffer[1], 52);
     entry_read.bytesFileSize = swapendiandword(todword(52, buffer));
     entry_read.clustersFileSize = swapendiandword(todword(56, buffer));
     entry_read.firstCluster = swapendiandword(todword(60, buffer));
@@ -179,7 +179,7 @@ struct t2fs_record torecord(BYTE *buffer) {
 
 void fromrecord(struct t2fs_record record, DWORD pos, BYTE *buffer) {
     buffer[pos + 0] = (BYTE) record.TypeVal;
-    strncpy(&buffer[pos + 1], record.name, 51);
+    strncpy((char *) &buffer[pos + 1], record.name, 51);
     fromdword(swapendiandword(record.bytesFileSize), pos + 52, buffer);
     fromdword(swapendiandword(record.clustersFileSize), pos + 56, buffer);
     fromdword(swapendiandword(record.firstCluster), pos + 60, buffer);
@@ -410,7 +410,7 @@ int getFirstClusterFromPathname(char *pathname, char *buffer, int last) {
 /* ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ ~~ */
 
 FILE2 create2 (char *filename) {
-    int i;
+    //int i;
     int handle = -1;
     int indexInDirectory = -1;
 
@@ -555,30 +555,22 @@ int delete2 (char *filename) {
 
         return -3;
     }
+    //printf("TypeVal: %x, name: %s\n", dir[indexInDirectory].TypeVal, dir[indexInDirectory].name);
+	firstCluster = dir[indexInDirectory].firstCluster;
+	clustersFileSize = dir[indexInDirectory].clustersFileSize;
+	currentCluster = firstCluster;
 
-    if (dir[indexInDirectory].TypeVal == TYPEVAL_REGULAR || dir[indexInDirectory].TypeVal == TYPEVAL_LINK) {
-        firstCluster = dir[indexInDirectory].firstCluster;
-        clustersFileSize = dir[indexInDirectory].clustersFileSize;
-        currentCluster = firstCluster;
+	for (i = 0; i < clustersFileSize; i++) {
+		initial_sector = first_data_sector + (currentCluster * sectors_per_cluster);
+		//printf("Initial Cluster: %x\n", currentCluster);
+		write_cluster(initial_sector, buffer);
 
-        for (i = 0; i < clustersFileSize; i++) {
-            initial_sector = first_data_sector + (currentCluster * sectors_per_cluster);
-            //printf("Initial Cluster: %x\n", currentCluster);
-            write_cluster(initial_sector, buffer);
+		nextCluster = fat[currentCluster];
+		fat[currentCluster] = 0x00000000;
+		currentCluster = nextCluster;
+	}
 
-            nextCluster = fat[currentCluster];
-            fat[currentCluster] = 0x00000000;
-            currentCluster = nextCluster;
-        }
-
-        dir[indexInDirectory] = new_record;
-    }
-    else {
-        free(dir);
-        free(fat);
-
-        return -4;
-    }
+	dir[indexInDirectory] = new_record;
     /*
     for (i = 0; i < nr_directory_entries; i++) {
         printf("TypeVal: %x, name: %s, bytesFileSize: %x, clustersFileSize: %x, firstCluster: %x\n", dir[i].TypeVal, dir[i].name, dir[i].bytesFileSize, dir[i].clustersFileSize, dir[i].firstCluster);
@@ -1218,7 +1210,7 @@ int getcwd2 (char *pathname, int size) {
     }
 
     strncpy(pathname, cwd, size);
-    printf("Current Working Directory: %s\n", pathname);
+    //printf("Current Working Directory: %s\n", pathname);
 
 	return 0;
 }
