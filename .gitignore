@@ -8,8 +8,6 @@
 ######################
 
 exemplo/*
-!exemplo/*.c
-!exemplo/Makefile
 teste/*
 !teste/*.c
 !teste/Makefile
